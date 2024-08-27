@@ -1,4 +1,5 @@
 <?php
+
 /**
  *
  * Adyen Payment Module
@@ -30,6 +31,8 @@ use Magento\Sales\Model\Order;
 
 class AuthorisationWebhookHandler implements WebhookHandlerInterface
 {
+    const CC_HOLD_STATUS = 'CREDIT_CARD_HOLD';
+
     /** @var AdyenOrderPayment */
     private $adyenOrderPaymentHelper;
 
@@ -67,8 +70,7 @@ class AuthorisationWebhookHandler implements WebhookHandlerInterface
         Config $configHelper,
         Invoice $invoiceHelper,
         PaymentMethods $paymentMethodsHelper
-    )
-    {
+    ) {
         $this->adyenOrderPaymentHelper = $adyenOrderPayment;
         $this->orderHelper = $orderHelper;
         $this->caseManagementHelper = $caseManagementHelper;
@@ -106,6 +108,14 @@ class AuthorisationWebhookHandler implements WebhookHandlerInterface
      */
     private function handleSuccessfulAuthorisation(Order $order, Notification $notification): Order
     {
+        // for credit card payments, we put the order on hold and return order
+        if ($notification->getPaymentMethod() === 'ADYEN_CC') {
+            $order->setState(Order::STATE_HOLDED);
+            $order->setStatus(self::CC_HOLD_STATUS);
+            $order->addCommentToStatusHistory(__('Order status set to CREDIT_CARD_HOLD due to successful credit card authorization.'));
+            return $order;
+        }
+
         $isAutoCapture = $this->paymentMethodsHelper->isAutoCapture($order, $notification->getPaymentMethod());
 
         // Set adyen_notification_payment_captured to true so that we ignore a possible OFFER_CLOSED
@@ -143,7 +153,8 @@ class AuthorisationWebhookHandler implements WebhookHandlerInterface
         $orderAmount = $orderAmountCurrency->getAmount();
         $order->getPayment()->setAmountAuthorized($orderAmount);
 
-        if ($notification->getPaymentMethod() == "c_cash" &&
+        if (
+            $notification->getPaymentMethod() == "c_cash" &&
             $this->configHelper->getConfigData('create_shipment', 'adyen_cash', $order->getStoreId())
         ) {
             $this->orderHelper->createShipment($order);
@@ -185,7 +196,7 @@ class AuthorisationWebhookHandler implements WebhookHandlerInterface
             $this->adyenLogger->addAdyenNotification(
                 "Order is already cancelled or holded, do nothing",
                 [
-                    'pspReference' =>$notification->getPspreference(),
+                    'pspReference' => $notification->getPspreference(),
                     'merchantReference' => $notification->getMerchantReference()
                 ]
             );
@@ -219,7 +230,7 @@ class AuthorisationWebhookHandler implements WebhookHandlerInterface
     {
         $this->invoiceHelper->createInvoice($order, $notification, true);
         if ($requireFraudManualReview) {
-             $order = $this->caseManagementHelper->markCaseAsPendingReview($order, $notification->getPspreference(), true);
+            $order = $this->caseManagementHelper->markCaseAsPendingReview($order, $notification->getPspreference(), true);
         } else {
             $order = $this->orderHelper->finalizeOrder($order, $notification);
         }
@@ -243,7 +254,7 @@ class AuthorisationWebhookHandler implements WebhookHandlerInterface
             $this->adyenLogger->addAdyenNotification(
                 'Capture mode is set to Manual',
                 [
-                    'pspReference' =>$notification->getPspreference(),
+                    'pspReference' => $notification->getPspreference(),
                     'merchantReference' => $notification->getMerchantReference()
                 ]
             );

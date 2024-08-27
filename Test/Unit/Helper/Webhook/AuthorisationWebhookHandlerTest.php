@@ -1,4 +1,5 @@
 <?php
+
 namespace Adyen\Payment\Test\Unit\Helper\Webhook;
 
 use Adyen\Payment\Helper\AdyenOrderPayment;
@@ -45,7 +46,7 @@ class AuthorisationWebhookHandlerTest extends AbstractAdyenTestCase
         $this->serializerMock = $this->createMock(SerializerInterface::class);
         $this->invoiceHelperMock = $this->createMock(Invoice::class);
         $this->paymentMethodsHelperMock = $this->createMock(PaymentMethods::class);
-        $paymentMethod = 'ADYEN_CC';
+        $paymentMethod = 'adyen_ideal'; // changed to other payment method different than ADYEN_CC. 
         $merchantReference = 'TestMerchant';
         $pspReference = 'ABCD1234GHJK5678';
         $this->notificationMock = $this->createConfiguredMock(Notification::class, [
@@ -188,6 +189,71 @@ class AuthorisationWebhookHandlerTest extends AbstractAdyenTestCase
     }
 
     /**
+     * Tests the handleWebhook method for credit card payment authorization.
+     * Verifies that an order paid with a credit card follows the new flow
+     * and sets the state to "Holded" and status to "CREDIT_CARD_HOLD".
+     */
+    public function testCreditCardAuthorizationSetsOrderToHold(): void
+    {
+
+        $this->notificationMock->method('getPaymentMethod')->willReturn('ADYEN_CC'); // 'scheme' is Adyen's code for credit card
+
+        $this->orderAmountCurrency = new AdyenAmountCurrency(
+            $orderAmount,
+            'EUR',
+            null,
+            null,
+            $orderAmount
+        );
+
+        $mockChargedCurrency = $this->createConfiguredMock(ChargedCurrency::class, [
+            'getOrderAmountCurrency' => $this->orderAmountCurrency
+        ]);
+
+        // Ensure that setState and setStatus are called with the expected values
+        $this->orderMock->expects($this->once())
+            ->method('setState')
+            ->with(Order::STATE_HOLDED); // Ensure the order state is set to 'holded'
+
+        $this->orderMock->expects($this->once())
+            ->method('setStatus')
+            ->with(AuthorisationWebhookHandler::CC_HOLD_STATUS); // Ensure the custom status is set
+
+        $paymentMethodsMock = $this->createConfiguredMock(
+            PaymentMethods::class,
+            [
+                'isAutoCapture' => true
+            ]
+        );
+
+        $authorisationWebhookHandler = $this->createAuthorisationWebhookHandler(
+            $this->adyenOrderPaymentMock,
+            $this->orderHelperMock,
+            null,
+            null,
+            null,
+            $mockChargedCurrency,
+            null,
+            null,
+            $paymentMethodsMock
+        );
+
+        // Invoke the private method
+        $handleSuccessfulAuthorisationMethod = $this->getPrivateMethod(
+            AuthorisationWebhookHandler::class,
+            'handleSuccessfulAuthorisation'
+        );
+
+        $result = $handleSuccessfulAuthorisationMethod->invokeArgs(
+            $authorisationWebhookHandler,
+            [$this->orderMock, $this->notificationMock]
+        );
+
+        // Assert the result
+        $this->assertInstanceOf(Order::class, $result);
+    }
+
+    /**
      * @throws ReflectionExceptionAlias
      */
     public function testHandleFailedAuthorisation(): void
@@ -264,7 +330,7 @@ class AuthorisationWebhookHandlerTest extends AbstractAdyenTestCase
     {
         // Set up expectations for handleManualCapture private method
         $this->orderHelperMock->expects($this->never()) // Since the condition is true
-        ->method('setPrePaymentAuthorized');
+            ->method('setPrePaymentAuthorized');
 
         $this->caseManagementMock->expects($this->once())
             ->method('markCaseAsPendingReview')
@@ -359,8 +425,7 @@ class AuthorisationWebhookHandlerTest extends AbstractAdyenTestCase
         $mockConfigHelper = null,
         $mockInvoiceHelper = null,
         $mockPaymentMethodsHelper = null
-    ): AuthorisationWebhookHandler
-    {
+    ): AuthorisationWebhookHandler {
         if (is_null($mockAdyenOrderPayment)) {
             $mockAdyenOrderPayment = $this->createMock(AdyenOrderPayment::class);
         }
